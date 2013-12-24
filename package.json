@@ -1,5 +1,5 @@
 {
-  "name": "node-mediaproxy-webrtc",
+  "name": "mediaproxy-webrtc",
   "version": "0.0.0",
   "description": "WebRTC interface for node-mediaproxy",
   "main": "index.js",
@@ -8,8 +8,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "github"
+    "url": "https://github.com/shimaore/node-mediaproxy-webrtc.git"
   },
   "author": "Stéphane Alnet <stephane@shimaore.net> (http://shimaore.net/)",
-  "license": "unlicense"
+  "license": "unlicense",
+  "keywords": [
+    "mediaproxy",
+    "RTP",
+    "WebRTC"
+  ]
 }
