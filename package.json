@@ -4,6 +4,7 @@
   "description": "WebRTC interface for node-mediaproxy",
   "main": "index.js",
   "scripts": {
+    "prepublish": "coffee -m -c index.coffee.md",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -16,5 +17,8 @@
     "mediaproxy",
     "RTP",
     "WebRTC"
-  ]
+  ],
+  "devDependencies": {
+    "coffee-script": "~1.6.3"
+  }
 }
