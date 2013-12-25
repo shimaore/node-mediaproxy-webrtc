@@ -1,6 +1,6 @@
 {
   "name": "mediaproxy-webrtc",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "WebRTC interface for node-mediaproxy",
   "main": "index.js",
   "scripts": {
