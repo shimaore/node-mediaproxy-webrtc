@@ -1,126 +1,98 @@
-    module.exports = (config) ->
-
-Obviously `getUserMedia()` is useless, since we will have multiple users (and therefor user streams).
-So we provide a dummy implementation for `MediaStream` and `getUserMedia()`.
+MediaProxyStream(Track)
+=======================
 
 See http://www.w3.org/TR/mediacapture-streams/#idl-def-MediaStream
 
-      class MediaStream
-        constructor: ->
-          @id = new uuid();
+Note: this probably is a `MediaStreamTrack` in the new WebRTC parlance.
+Also this is a two-way stream, so it serves both purposes of a `sending` (localStream) and `receiving` (remoteStream) wrt RTCPeerConnection.
 
-          # @onended = null;
-          # @onaddtrack = null;
-          # @onremovetrack = null;
+    SDP = require 'sdp'
+    request = require 'superagent'
 
-        stop: ->
-          # Do nothing, who would we talk to?
+    class MediaProxyMediaStream
+
+      ### Typical @constraints value:
+        media:
+          address: # IP address of mediaproxy Media
+          proxy_base: # base URI for access to MediaProxy
+        description:
+          type: 'audio'
+          formats: [ 3 ] # actually may be GSM, GSM-EFR, or GSM-HR-08; for now GSM
+          attributes: [
+            ## rtpmap is optional since the format (3) is well-known.
+            # { key: 'rtpmap', value: '3 GSM/8000'  }
+            { key: 'ptime', value: 20 }
+          ]
+      ###
+
+      constructor: (@constraints) ->
+        @id = new uuid();
+
+        # @onended = null;
+        # @onaddtrack = null;
+        # @onremovetrack = null;
+
+A sending stream must provide the equivalent of `getUserMedia`:
+For `getUserMedia` see http://www.w3.org/TR/mediacapture-streams/
+
+      get: (success,failure) ->
+
+        options =
+          sip_leg:
+            local:
+              address: constraints.media.address
+              port: null # dynamically allocated
+
+        request.put "#{@constraints.media.proxy_base}/proxy/#{@id}", options, (err,res) =>
+          if err? then return failure err
+
+          leg = res?.body?.sip_leg
+          if not leg? then return failure 'Unable to build leg'
+          if leg.error? then return failure leg.error
+
+          @description.port = leg.local.port
+          @description.numberOfPorts = 1
+          @description.proto = 'RTP/AVP' # RFC3551
+          @description.connection =
+            netType: 'IN'
+            addrType: 'IP4'
+            address: leg.local.address
+
+          success this
+
+A receiving stream must provide the equivalent of `setRemoteDescription`:
+
+      setRemoteSession: (session,success,failure) ->
+        mediaproxy.get "#{@constraints.media.proxy_base}/proxy/#{@id}", (err,res) =>
+          if err? then return failure err
+
+          options = res?.body
+          if not options? then return failure 'Could not set options'
+
+          options.sip_leg ?= {}
+          options.sip_leg.remote =
+            address: session.connection?.address ? @description.connection?.address
+            port: first_audio_media.port
+
+          mediaproxy.put "#{@constraints.media.proxy_base}/proxy/#{@id}", options, (err,res) =>
+              if err?
+                return failure err
+              success()
+
+      stop: ->
+        request.delete "#{@constraints.media.proxy_base}/proxy/#{@id}", options, (err,res) =>
+          if err?
+            throw new Error err
 
       #  MediaStream.prototype.getAudioTracks
       #  MediaStream.prototype.getVideoTracks
       #  etc.: not implemented
       #  Doesn't look like we're using any other attribute.
 
-For `getUserMedia` see http://www.w3.org/TR/mediacapture-streams/
-
-      getUserMedia = (options,success,failure) ->
-        # options :: {video:boolean,audio:boolean};
-        media = new MediaStream()
-        success(media)
-
-MediaProxyPeerConnection
-========================
-
-      SDP = require 'sdp'
-      RTCPeerConnection = require 'rtc-peer-connection'
-      request = require 'superagent'
-
-      class MediaProxyPeerConnection extends RTCPeerConnection
-
-In order to build an SDP offer we must first allocate a port on the mediaproxy.
-
-        sdpOffer: (success,failure) ->
-          if @_localSession?
-            success @_localSession
-          media = new MediaStream()
-
-FIXME: This assumes a single mediastream per leg. A generic mediaproxy should handle multiple streams.
-
-          options =
-            sip_leg:
-              local:
-                address: config.media.address
-                port: null # dynamically allocated
-
-          request.put "#{config.media.proxy_base}/proxy/#{media.id}", options, (err,res) ->
-            leg = res?.body?.sip_leg
-            if err? or leg?.error?
-              return failure err ? res.body.sip_leg.error
-
-FIXME: This assumes GSM.
-
-            @_media = media
-            session = new SDP.Session
-              origin:
-                username: 'MediaProxy'
-                sessionID: media.id
-                sessionVersion: 1
-                netType: 'IN'
-                addrType: 'IP4'
-                address: config.signalling.address
-              # connection information is shared
-              connection:
-                netType: 'IN'
-                addrType: 'IP4'
-                address: leg.local.address
-              media: [
-                {
-                  type: 'audio'
-                  port: leg.local.port
-                  numberOfPorts: 1
-                  proto: 'RTP/AVP' # RFC3551
-                  formats: [ 3 ] # actually may be GSM, GSM-EFR, or GSM-HR-08; for now GSM
-                  attributes: [ 
-                    ## rtpmap is optional since the format (3) is well-known.
-                    # { key: 'rtpmap', value: '3 GSM/8000'  }
-                    { key: 'ptime', value: 20 }
-                  ]
-                }
-              ]
-            success session
-
-        sdpAnswer: (success,failure) ->
-          @sdpOffer success, failure
-
-        setLocalSDP: (session,success,failure) ->
-          # I don't think we really care here, since all processing was previously done
-          # by sdpOffer or sdpAnswer.
-          success()
-
-        setRemoteSDP: (session,success,failure) ->
-          mediaproxy.get "/proxy/#{@_media.id}", (err,res) ->
-            options = res?.body
-            if err? or not options?
-              failure err
-
-            options.sip_leg ?= {}
-
-FIXME: This assumes a single stream, and hardcode our way through the first audio stream.
-
-            first_audio_media = session.media?.filter( (_) -> _.type is 'audio').shift()
-            if first_audio_media?
-              options.sip_leg.remote =
-                address: session.connection?.address ? first_audio_media.connection?.address
-                port: first_audio_media.port
-
-              mediaproxy.put "/proxy/#{media.id}", options, (err,res) ->
-                if err?
-                  return failure err
-                success()
-
-      RTCSessionDescription = require 'rtc-session-description'
-
-      WebRTC =
-        getUserMedia: getUserMedia,
-        RTCPeerConnection: RTCPeerConnection,
-        RTCSessionDescription: RTCSessionDescription
+    module.exports =
+      getUserMedia: (constraints,success,failure) ->
+        media = new MediaProxyMediaStream constraints
+        media.get success, failure
+      RTCPeerConnection: require 'rtc-peer-connection'
+      RTCSessionDescription: require 'rtc-session-description'
+      isSupported: true
