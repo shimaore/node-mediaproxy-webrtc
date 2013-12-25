@@ -1,10 +1,10 @@
     module.exports = (config) ->
 
-      # Obviously getUserMedia() is useless, since we will have multiple users
-      # (and therefor user streams).
-      # So we provide a dummy implementation for MediaStream and getUserMedia().
+Obviously `getUserMedia()` is useless, since we will have multiple users (and therefor user streams).
+So we provide a dummy implementation for `MediaStream` and `getUserMedia()`.
 
-      # http://www.w3.org/TR/mediacapture-streams/#idl-def-MediaStream
+See http://www.w3.org/TR/mediacapture-streams/#idl-def-MediaStream
+
       class MediaStream
         constructor: ->
           @id = new uuid();
@@ -21,51 +21,65 @@
       #  etc.: not implemented
       #  Doesn't look like we're using any other attribute.
 
-      #  http://www.w3.org/TR/mediacapture-streams/
+For `getUserMedia` see http://www.w3.org/TR/mediacapture-streams/
+
       getUserMedia = (options,success,failure) ->
         # options :: {video:boolean,audio:boolean};
         media = new MediaStream()
         success(media)
 
-      # ----------------------------------------------------
+MediaProxyPeerConnection
+========================
 
+      SDP = require 'sdp'
       RTCPeerConnection = require 'rtc-peer-connection'
+      request = require 'superagent'
 
       class MediaProxyPeerConnection extends RTCPeerConnection
+
+In order to build an SDP offer we must first allocate a port on the mediaproxy.
+
         sdpOffer: (success,failure) ->
-          if @_media?
-            success(@_localSession)
+          if @_localSession?
+            success @_localSession
           media = new MediaStream()
+
+FIXME: This assumes a single mediastream per leg. A generic mediaproxy should handle multiple streams.
+
           options =
             sip_leg:
               local:
-                address: config.local.media.address
+                address: config.media.address
+                port: null # dynamically allocated
 
-          mediaproxy.put "/proxy/#{media.id}", options, (err,res) ->
-            if err?
-              return failure err
+          request.put "#{config.media.proxy_base}/proxy/#{media.id}", options, (err,res) ->
+            leg = res?.body?.sip_leg
+            if err? or leg?.error?
+              return failure err ? res.body.sip_leg.error
+
+FIXME: This assumes GSM.
 
             @_media = media
             session = new SDP.Session
               origin:
-                username: JsSIP.name
+                username: 'MediaProxy'
                 sessionID: media.id
                 sessionVersion: 1
                 netType: 'IN'
                 addrType: 'IP4'
-                address: config.local.signalling.address
+                address: config.signalling.address
               # connection information is shared
               connection:
                 netType: 'IN'
                 addrType: 'IP4'
-                address: config.local.media.address
+                address: leg.local.address
               media: [
                 {
                   type: 'audio'
-                  port: res.local.port
+                  port: leg.local.port
                   numberOfPorts: 1
-                  proto: 'RTP/AVP'
-                  formats: [ 3 ]
+                  proto: 'RTP/AVP' # RFC3551
+                  formats: [ 3 ] # actually may be GSM, GSM-EFR, or GSM-HR-08; for now GSM
                   attributes: [ 
                     ## rtpmap is optional since the format (3) is well-known.
                     # { key: 'rtpmap', value: '3 GSM/8000'  }
@@ -85,14 +99,24 @@
 
         setRemoteSDP: (session,success,failure) ->
           mediaproxy.get "/proxy/#{@_media.id}", (err,res) ->
-            res.sip_leg.remote =
-              address: session.connection?.address ? session.media?[0]?.connection?.address
-              port: session.media?[0]?.port
+            options = res?.body
+            if err? or not options?
+              failure err
 
-            mediaproxy.put "/proxy/#{media.id}", options, (err,res) ->
-              if err?
-                return failure err
-              success()
+            options.sip_leg ?= {}
+
+FIXME: This assumes a single stream, and hardcode our way through the first audio stream.
+
+            first_audio_media = session.media?.filter( (_) -> _.type is 'audio').shift()
+            if first_audio_media?
+              options.sip_leg.remote =
+                address: session.connection?.address ? first_audio_media.connection?.address
+                port: first_audio_media.port
+
+              mediaproxy.put "/proxy/#{media.id}", options, (err,res) ->
+                if err?
+                  return failure err
+                success()
 
       RTCSessionDescription = require 'rtc-session-description'
 
